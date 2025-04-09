@@ -8,13 +8,12 @@ import scala.tools.reflect.ToolBox
 import scala.reflect.runtime.universe._
 
 class InterconnectParams(
-  val cpuPorts: Int,            // Number of ports from the CPU
-  val streamerports: Int,       // Number of ports from the streamer
-  val streamerAdressing: Int,   // Address width of the streamer
-  val bankAddressing: Int,      // Address width of the each bank
-  val totalBanks: Int           // Total number of banks available for the interconnect
+  val cpuPorts:          Int,        // Number of ports from the CPU
+  val streamerAdressing: Seq[Int],   // Address width of the streamer
+  val bankAddressing:    Int,        // Address width of the each bank
+  val totalBanks:        Int         // Total number of banks available for the interconnect
 ){
-  val usedPortStreamer:Int = streamerAdressing/bankAddressing
+  val usedPortStreamer:Seq[Int] = streamerAdressing.map(_/bankAddressing)
   val numPortCPU:Int      = cpuPorts  
 }
 
@@ -47,7 +46,7 @@ class flexibleInterconnect(
   )
 
   // Create a boolean matrix to map the interconnect
-  val connectReqTot = params.numPortCPU + params.streamerports
+  val connectReqTot = params.numPortCPU + params.usedPortStreamer.sum
   var connectMat    = RegInit(VecInit(Seq.fill(connectReqTot)(VecInit(Seq.fill(params.totalBanks)(false.B)))))
 
   // Set connections from CPU to all banks
@@ -57,11 +56,15 @@ class flexibleInterconnect(
     }
   }
 
-  // Set connections from Streamer to required banks
-  for (ports <- 0 until params.usedPortStreamer) {
-    for (banks <- 0 until params.totalBanks if banks % params.usedPortStreamer == ports){
-      connectMat(params.numPortCPU + ports)(banks) := true.B
+  var portOffset:Int = 0
+  for (streameriter <- params.usedPortStreamer.indices) {
+    // Set connections from Streamer to required banks
+    for (ports <- 0 until params.usedPortStreamer(streameriter)) {
+      for (banks <- 0 until params.totalBanks if banks % params.usedPortStreamer(streameriter) == ports){
+        connectMat(params.numPortCPU + portOffset + ports)(banks) := true.B
+      }
     }
+    portOffset += params.usedPortStreamer(streameriter)
   }
 
   // === Print the matrix: rows = requesters, columns = banks ===

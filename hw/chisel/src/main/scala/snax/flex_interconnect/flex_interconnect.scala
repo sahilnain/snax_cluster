@@ -56,16 +56,18 @@ class flexibleInterconnect(
     }
   }
 
-  var portOffset:Int = 0
-  for (streameriter <- params.usedPortStreamer.indices) {
-    // Set connections from Streamer to required banks
-    for (ports <- 0 until params.usedPortStreamer(streameriter)) {
-      for (banks <- 0 until params.totalBanks if banks % params.usedPortStreamer(streameriter) == ports){
-        connectMat(params.numPortCPU + portOffset + ports)(banks) := true.B
+  // Streamer: round-robin allocation
+  params.usedPortStreamer
+    .scanLeft(params.numPortCPU) { (offset, portsForStreamer) => offset + portsForStreamer }
+    .sliding(2) // gives pairs: (start, end)
+    .zip(params.usedPortStreamer)
+    .foreach { case (Seq(start, _), portsForStreamer) =>
+      for (ports <- 0 until portsForStreamer) {
+        for (banks <- 0 until params.totalBanks if banks % portsForStreamer == ports) {
+          connectMat(start + ports)(banks) := true.B
+        }
       }
     }
-    portOffset += params.usedPortStreamer(streameriter)
-  }
 
   // === Print the matrix: rows = requesters, columns = banks ===
   printf(p"\n--- Connection Matrix (Requesters x Banks) ---\n")

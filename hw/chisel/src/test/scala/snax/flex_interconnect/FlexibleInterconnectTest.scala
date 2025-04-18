@@ -1,53 +1,58 @@
 package snax.flex_interconnect
-import snax.flex_interconnect._
 
 import chisel3._
-import chisel3.iotesters.{PeekPokeTester, Driver}
+import circt.stage.ChiselStage
+import chiseltest._
+import org.scalatest.flatspec.AnyFlatSpec
 
-class flexibleInterconnectTester(c: flexibleInterconnect) extends PeekPokeTester(c) {
+class InterconnectTest extends AnyFlatSpec with ChiselScalatestTester {
 
-  // Initialize the ports
-  poke(c.io.banks(0).valid, false.B)   // Initialize valid signals for all banks
-  poke(c.io.banks(1).valid, false.B)
-  poke(c.io.banks(0).bits, 0.U)
-  poke(c.io.banks(1).bits, 0.U)
+  "flexibleInterconnect" should "connect CPU and streamer ports to banks correctly" in {
 
-  // Set up initial valid signals for CPU and streamer ports
-  poke(c.io.cpuP(0).valid, true.B)     // CPU port 0 sends data
-  poke(c.io.cpuP(1).valid, false.B)    // CPU port 1 does not send data
-  poke(c.io.streamerP(0)(0).valid, true.B)  // Streamer port 0 sends data
-  poke(c.io.streamerP(1)(0).valid, false.B) // Streamer port 1 does not send data
+    val params = new InterconnectParams(
+      cpuPorts = 1,                 // One CPU port
+      streamerAdressing = Seq(64),  // One streamer with one 64-bit port
+      bankAddressing = 64,          // Banks are 64-bit addressed
+      totalBanks = 4                // Four banks
+    )
 
-  // Now simulate a few clock cycles
-  step(1)  // Step 1 clock cycle
+    test(new flexibleInterconnect(params)) { dut =>
 
-  // Check the interconnect's response
-  // Assert that the bank's ready signal is high if a valid request is sent
-  expect(c.io.banks(0).ready, true.B)   // Bank 0 should be ready because CPU port 0 is valid
-  expect(c.io.banks(1).ready, true.B)   // Bank 1 should be ready because streamer port 0 is valid
+      // Initially clear everything
+      dut.io.banks.foreach { bank =>
+        bank.valid.poke(false.B)
+        bank.bits.poke(0.U)
+      }
+      dut.io.cpuP.foreach { cpu =>
+        cpu.ready.poke(false.B)
+      }
+      for (group <- dut.io.streamerP; port <- group) {
+        port.ready.poke(false.B)
+      }
 
-  // Change the inputs: Let CPU port 0 not be valid and make streamer port 1 valid
-  poke(c.io.cpuP(0).valid, false.B)
-  poke(c.io.streamerP(1)(0).valid, true.B)
+      // Test vector: send from bank 0
+      dut.io.banks(0).valid.poke(true.B)
+      dut.io.banks(0).bits.poke(0xABCD.U)
 
-  step(1)  // Step 1 clock cycle again
+      // Case 1: CPU is ready
+      dut.io.cpuP(0).ready.poke(true.B)
+      dut.clock.step(1)
+      dut.io.cpuP(0).valid.expect(true.B)
+      dut.io.cpuP(0).bits.expect(0xABCD.U)
+      dut.io.banks(0).ready.expect(true.B)
 
-  // Assert that bank 1 should be ready now because streamer 1 is valid
-  expect(c.io.banks(0).ready, false.B)  // Bank 0 should no longer be ready (since CPU port 0 isn't valid)
-  expect(c.io.banks(1).ready, true.B)   // Bank 1 should be ready because streamer 1 is valid
+      // Case 2: CPU not ready, Streamer is ready
+      dut.io.cpuP(0).ready.poke(false.B)
+      dut.io.streamerP(0)(0).ready.poke(true.B)
+      dut.clock.step(1)
+      dut.io.streamerP(0)(0).valid.expect(true.B)
+      dut.io.streamerP(0)(0).bits.expect(0xABCD.U)
+      dut.io.banks(0).ready.expect(true.B)
 
-  // Continue to test round-robin behavior, data transfer, and priority
-  // For example, you can test the next clock cycle with different valid signals, etc.
-
-  // Additional checks could include:
-  // - Verifying that CPU ports are prioritized over streamer ports
-  // - Verifying round-robin behavior (i.e., which streamer port gets assigned to which bank)
-}
-
-object flexibleInterconnectTester extends App {
-  // Create the testbench and run the tests
-  iotesters.Driver.execute(args, () => new flexibleInterconnect(params)) {
-    c => new flexibleInterconnectTester(c)
+      // Case 3: No one is ready
+      dut.io.streamerP(0)(0).ready.poke(false.B)
+      dut.clock.step(1)
+      dut.io.banks(0).ready.expect(false.B)
+    }
   }
 }
-

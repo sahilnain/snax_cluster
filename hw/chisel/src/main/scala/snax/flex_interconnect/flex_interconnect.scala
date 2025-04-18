@@ -92,7 +92,7 @@ class flexibleInterconnect(
   // Use the connection matrix to make the connections
   // Iterate over each bank to make the connection
   for (bankIdx <- 0 until params.totalBanks) {
-    val cpuReadySignals = WireInit(VecInit(Seq.fill(params.numPortCPU)(false.B)))
+    val cpuReadySignals      = WireInit(VecInit(Seq.fill(params.numPortCPU)(false.B)))
     val streamerReadySignals = WireInit(VecInit(Seq.fill(connectMat.length - params.numPortCPU)(false.B)))
 
     for(streamerPortIdx <- params.numPortCPU until connectMat.length) {
@@ -100,8 +100,7 @@ class flexibleInterconnect(
         val (groupIdx, portIdx) = getStreamerIndices((streamerPortIdx - params.numPortCPU), params.usedPortStreamer)
         io.streamerP(groupIdx)(portIdx).valid   := io.banks(bankIdx).valid
         io.streamerP(groupIdx)(portIdx).bits    := io.banks(bankIdx).bits
-        streamerReadySignals(streamerPortIdx - params.numPortCPU) := 
-          connectMat(streamerPortIdx)(bankIdx) && io.streamerP(groupIdx)(portIdx).ready
+        streamerReadySignals(streamerPortIdx - params.numPortCPU) := io.streamerP(groupIdx)(portIdx).ready
       }
     }
 
@@ -109,7 +108,7 @@ class flexibleInterconnect(
       if(connectMat(cpuPortIdx)(bankIdx)){
         io.cpuP(cpuPortIdx).valid        := io.banks(bankIdx).valid
         io.cpuP(cpuPortIdx).bits         := io.banks(bankIdx).bits
-        cpuReadySignals(cpuPortIdx) := io.cpuP(cpuPortIdx).ready
+        cpuReadySignals(cpuPortIdx)      := io.cpuP(cpuPortIdx).ready
       }
     }
 

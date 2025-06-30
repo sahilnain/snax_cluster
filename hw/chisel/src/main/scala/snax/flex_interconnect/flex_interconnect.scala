@@ -1,3 +1,11 @@
+/*
+* This file can generate a correct connection map and a simple connection based on it. It provides a skeleton for the actual hardware connection,
+* Next Steps:
+ 1. Change the I/O to support existing tcdmReq and tcdmRsp
+ 2. Adapt the code to support mutliple connections to the same memory port via MUX
+ 3. Write an arbitration scheme for selection among multiple ports
+ 4. Change the testing script "hw\chisel\src\test\scala\snax\flex_interconnect\FlexibleInterconnectTest.scala" to include all cases
+*/
 package snax.flex_interconnect
 
 import chisel3._

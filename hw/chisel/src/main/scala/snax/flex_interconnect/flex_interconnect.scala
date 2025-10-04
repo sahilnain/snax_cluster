@@ -1,4 +1,15 @@
+/*
+* This file can generate a correct connection map and a simple connection based on it. It provides a skeleton for the actual hardware connection,
+* Next Steps:
+ 1. Change the I/O to support existing tcdmReq and tcdmRsp
+ 2. Adapt the code to support mutliple connections to the same memory port via MUX
+ 3. Write an arbitration scheme for selection among multiple ports
+ 4. Change the testing script "hw\chisel\src\test\scala\snax\flex_interconnect\FlexibleInterconnectTest.scala" to include all cases
+*/
+
 package snax.flex_interconnect
+
+import snax.utils._
 
 import chisel3._
 import chisel3.util._
@@ -8,29 +19,42 @@ import scala.tools.reflect.ToolBox
 import scala.reflect.runtime.universe._
 
 class InterconnectParams(
-  val cpuPorts:          Int,        // Number of ports from the CPU
-  val streamerAdressing: Seq[Int],   // Address width of the streamer
-  val bankAddressing:    Int,        // Address width of the each bank
+  val numPortCPU:       Int,         // Number of ports from the CPU
+  val addrWidthStreamer: Seq[Int],   // Address width of the streamer
+  val dataWidthStreamer: Seq[Int],   // Address width of the streamer
+  val addrWidthBank:     Int,        // Address width of the each bank
+  val dataWidthBank:     Int,        // Data width of the each bank
   val totalBanks:        Int         // Total number of banks available for the interconnect
 ){
-  val usedPortStreamer:Seq[Int] = streamerAdressing.map(_/bankAddressing)
-  val numPortCPU:Int      = cpuPorts  
+  val numPortStreamer:Seq[Int] = addrWidthStreamer.map(_/addrWidthBank)
 }
 
-class InterconnectParamsIO(
-  params: InterconnectParams
-) extends Bundle {
-  // Add any hardware IO if required here
-  // Flipped here makes the output to input, with flipped valid is an output, ready is an input and bits are output.
-  // Flipped is used with consumers. For now, I'm assuming that the banks are always the producers, although this is not the case always
-  val cpuP      = Vec(params.numPortCPU, 
-                      Flipped(Decoupled(UInt(params.bankAddressing.W))))  // CPU data width = bank data width
-  // Each streamer port will be of 64 bit wide however a streamer can have more than 1 port,
-  // for 128 bit address space streamer would get 2 64 bit port connected to banks in a round robin fashion
-  val streamerP = MixedVec(params.usedPortStreamer.map 
-                      { numPorts => Vec(numPorts, Flipped(Decoupled(UInt(params.bankAddressing.W))))}) // Streamer data width >= bank data width
-  val banks     = Vec(params.totalBanks, 
-                      Decoupled(UInt(params.bankAddressing.W)))
+// Class for create a response and a request channel for each port
+class portIO(addrWidth: Int, tcdmDataWidth: Int, numPorts: Int) extends Bundle {
+  val req_port  = Vec(numPorts,
+                    Decoupled(new TcdmReq(addrWidth     = addrWidth,
+                                          tcdmDataWidth = tcdmDataWidth)))
+  val rsp_port  = Vec(numPorts,
+                    Decoupled(new TcdmRsp(tcdmDataWidth = tcdmDataWidth)))
+}
+
+class InterconnectParamsIO(params: InterconnectParams) extends Bundle {
+  // CPU ports: sending TCDM requests
+  val cpuPorts = new portIO(addrWidth     = params.addrWidthBank,
+                            tcdmDataWidth = params.addrWidthBank,
+                            numPorts      = params.numPortCPU)
+  // Streamer ports: each streamer can have multiple ports, sending TCDM requests
+  /* The address and data width of each port will be equal to the banks however
+     each streamer can have multiple ports so the overall width can be bigger, this 
+     allows for flexiblity in the connection */
+  val streamerPorts = MixedVec(params.numPortStreamer.map {numPorts =>
+                              new portIO( addrWidth     = params.addrWidthBank,
+                                          tcdmDataWidth = params.addrWidthBank,
+                                          numPorts      = numPorts)})
+  // TCDM ports
+  val tcdmPorts = new portIO(addrWidth     = params.addrWidthBank,
+                              tcdmDataWidth = params.addrWidthBank,
+                              numPorts      = params.totalBanks)
 }
 
 class flexibleInterconnect(
@@ -43,13 +67,14 @@ class flexibleInterconnect(
     "Total banks should be more than number of ports from streamer"
   )
   require(
-    params.bankAddressing == 64,
+    params.addrWidthBank == 64,
     "Each bank must have a 64 bit address bus"
   )
 
   // Create a boolean matrix to map the interconnect
-  val connectReqTot = params.numPortCPU + params.usedPortStreamer.sum
-  lazy val connectMat: Array[Array[Boolean]] = Array.fill(connectReqTot, params.totalBanks)(false)
+  val numPortsTotal = params.numPortCPU + params.numPortStreamer.sum
+  // lazy val because we need to compute this only once and not change after that
+  lazy val connectMat: Array[Array[Boolean]] = Array.fill(numPortsTotal, params.totalBanks)(false)
 
   // Input output parameters
   val io = IO(
@@ -59,30 +84,30 @@ class flexibleInterconnect(
   )
 
   // Set connections from CPU to all banks
-  for (ports <- 0 until params.numPortCPU) {
-    for (banks <- 0 until params.totalBanks) {
-      connectMat(ports)(banks) = true
+  for (portsIter <- 0 until params.numPortCPU) {
+    for (tcdmPortsIter <- 0 until params.totalBanks) {
+      connectMat(portsIter)(tcdmPortsIter) = true
     }
   }
 
   // Streamer: round-robin allocation
-  params.usedPortStreamer
+  params.numPortStreamer
     .scanLeft(params.numPortCPU) { (offset, portsForStreamer) => offset + portsForStreamer } // Compute the offset for ports of the streamer
     .sliding(2) // gives pairs: (start, end)
-    .zip(params.usedPortStreamer) // Group with used ports
+    .zip(params.numPortStreamer) // Group with used ports
     .foreach { case (Seq(start, _), portsForStreamer) => // Use the start and number of ports to mark connections
-      for (ports <- 0 until portsForStreamer) {
-        for (banks <- 0 until params.totalBanks if banks % portsForStreamer == ports) {
-          connectMat(start + ports)(banks) = true
+      for (portsIter <- 0 until portsForStreamer) {
+        for (tcdmPortsIter <- 0 until params.totalBanks if tcdmPortsIter % portsForStreamer == portsIter) {
+          connectMat(start + portsIter)(tcdmPortsIter) = true
         }
       }
     }
 
-  def getStreamerIndices(flatIndex: Int, usedPortStreamer: Seq[Int]): (Int, Int) = {
+  def getStreamerIndices(flatIndex: Int, numPortStreamer: Seq[Int]): (Int, Int) = {
     var group = 0
     var sum = 0
-    while (group < usedPortStreamer.length && sum + usedPortStreamer(group) <= flatIndex) {
-      sum += usedPortStreamer(group)
+    while (group < numPortStreamer.length && sum + numPortStreamer(group) <= flatIndex) {
+      sum += numPortStreamer(group)
       group += 1
     }
     val port = flatIndex - sum
@@ -92,32 +117,85 @@ class flexibleInterconnect(
   // Use the connection matrix to make the connections
   // Iterate over each bank to make the connection
   for (bankIdx <- 0 until params.totalBanks) {
-    val cpuReadySignals      = WireInit(VecInit(Seq.fill(params.numPortCPU)(false.B)))
-    val streamerReadySignals = WireInit(VecInit(Seq.fill(connectMat.length - params.numPortCPU)(false.B)))
+    // Vector for mapping ready signals
+    val cpuReqReadySignals      = WireInit(VecInit(Seq.fill(params.numPortCPU)(false.B)))
+    val streamerReqReadySignals = WireInit(VecInit(Seq.fill(connectMat.length - params.numPortCPU)(false.B)))
 
-    for(streamerPortIdx <- params.numPortCPU until connectMat.length) {
-      if(connectMat(streamerPortIdx)(bankIdx)){
-        val (groupIdx, portIdx) = getStreamerIndices((streamerPortIdx - params.numPortCPU), params.usedPortStreamer)
-        io.streamerP(groupIdx)(portIdx).valid   := io.banks(bankIdx).valid
-        io.streamerP(groupIdx)(portIdx).bits    := io.banks(bankIdx).bits
-        streamerReadySignals(streamerPortIdx - params.numPortCPU) := io.streamerP(groupIdx)(portIdx).ready
+    // Collect all connected ports to this bank(both CPU and Streamer)
+    val connectedCpuPorts      = (0 until params.numPortCPU).filter { cpuPortIdx => connectMat(cpuPortIdx)(bankIdx)}
+    val connectedStreamerPorts = (0 until (connectMat.length - params.numPortCPU)).filter{streamerPortIdx =>
+      connectMat(streamerPortIdx + params.numPortCPU)(bankIdx)}
+
+    // Total number of connections
+    val totalConnections = connectedCpuPorts.size + connectedStreamerPorts.size
+    // if there is only 1 connection then we dont need any mux
+    if (totalConnections == 1) {
+      // Only one port is connected — direct connection, no mux needed
+      if (connectedCpuPorts.nonEmpty) {
+        val cpuPortIdx = connectedCpuPorts.head
+
+        // Connect CPU -> TCDM request
+        io.tcdmPorts(bankIdx).req_port <> io.cpuPorts(cpuPortIdx).req_port
+        // Connect TCDM -> CPU response
+        io.cpuPorts(cpuPortIdx).rsp_port <> io.tcdmPorts(bankIdx).rsp_port
+
+      } else {
+        val streamerFlatIdx = connectedStreamerPorts.head
+        val (groupIdx, portIdx) = getStreamerIndices(streamerFlatIdx, params.numPortStreamer)
+
+        // Connect Streamer -> TCDM request
+        io.tcdmPorts(bankIdx).req_port <> io.streamerPorts(groupIdx)(portIdx).req_port
+        // Connect TCDM -> Streamer response
+        io.streamerPorts(groupIdx)(portIdx).rsp_port <> io.tcdmPorts(bankIdx).rsp_port
       }
-    }
+    } else {
+      // Multiple ports connected — need a multiplexer
+      // Placeholder arbitration signal
+      val selectionLine = Wire(UInt(log2Ceil(totalConnections).W))
+      selectionLine := 0.U // hardcoded for now
+      val selectedReqPort = Wire(new TcdmReq(addrWidth     = params.addrWidthBank,
+                                          tcdmDataWidth    = params.dataWidthBank))
+      val selectedRspPort = Wire(new TcdmRsp(tcdmDataWidth = params.dataWidthBank))
 
-    for(cpuPortIdx <- 0 until params.numPortCPU) {
-      if(connectMat(cpuPortIdx)(bankIdx)){
-        io.cpuP(cpuPortIdx).valid        := io.banks(bankIdx).valid
-        io.cpuP(cpuPortIdx).bits         := io.banks(bankIdx).bits
-        cpuReadySignals(cpuPortIdx)      := io.cpuP(cpuPortIdx).ready
-      }
-    }
+      // Request channel connection
+      // Now, collect the actual CPU ports based on the filtered indices
+      val connectedCpuReqPorts      = VecInit(connectedCpuPorts.map(cpuPortIdx => io.cpuPorts(cpuPortIdx).req_port))
+      val connectedStreamerReqPorts = VecInit(connectedStreamerPorts.map { streamerPortIdx =>
+          val (groupIdx, portIdx) = getStreamerIndices(streamerPortIdx, params.numPortStreamer)
+          io.streamerPorts(groupIdx)(portIdx).req_port})
+      // Combine all request ports into a single sequence
+      val allConnectedReqPorts = connectedCpuReqPorts ++ connectedStreamerReqPorts
+      // Instantiate the MuxDecoupled
+      val portReqSelectionMux = Module(new MuxDecoupled(
+                                    new TcdmReq(
+                                      addrWidth     = params.addrWidthBank,
+                                      tcdmDataWidth = params.dataWidthBank), 
+                                      numInput = allConnectedReqPorts.length))
 
-    when(cpuReadySignals.asUInt.orR) {
-      io.banks(bankIdx).ready := true.B  // CPU is ready, so bank can send
-    } .elsewhen(streamerReadySignals.asUInt.orR) {
-      io.banks(bankIdx).ready := true.B  // No CPU wants, so streamers can take
-    } .otherwise {
-      io.banks(bankIdx).ready := false.B // No one ready
+      // Multiplexing: Select signal from the ready ports
+      portReqSelectionMux.io.sel := selectionLine
+      io.tcdmPorts(bankIdx).req_port <> portReqSelectionMux.io.out
+      portReqSelectionMux.io.in := VecInit(allConnectedReqPorts)
+
+      // Response channel connection
+      // Now, collect the actual CPU ports based on the filtered indices
+      val connectedCpuRspPorts      = VecInit(connectedCpuPorts.map(cpuPortIdx => io.cpuPorts(cpuPortIdx).rsp_port))
+      val connectedStreamerRspPorts = VecInit(connectedStreamerPorts.map { streamerPortIdx =>
+          val (groupIdx, portIdx) = getStreamerIndices(streamerPortIdx, params.numPortStreamer)
+          io.streamerPorts(groupIdx)(portIdx).rsp_port})
+      // Combine all request ports into a single sequence
+      val allConnectedRspPorts = connectedCpuRspPorts ++ connectedStreamerRspPorts
+      // Instantiate the MuxDecoupled
+      val portRspSelectionMux = Module(new MuxDecoupled(
+                                    new TcdmReq(
+                                      addrWidth     = params.addrWidthBank,
+                                      tcdmDataWidth = params.dataWidthBank), 
+                                      numInput = allConnectedRspPorts.length))
+
+      // Multiplexing: Select signal from the ready ports
+      portRspSelectionMux.io.sel := selectionLine
+      io.tcdmPorts(bankIdx).rsp_port <> portRspSelectionMux.io.out
+      portRspSelectionMux.io.in := VecInit(allConnectedRspPorts)
     }
   }
 }

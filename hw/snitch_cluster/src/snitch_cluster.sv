@@ -910,7 +910,7 @@ module snitch_cluster
         snax_tcdm_rsp_wide[i*8].q_ready = snax_wide_rsp[i].q_ready;
       end
     end
-
+//Sahil: here, use the same module and definition
     snitch_tcdm_interconnect #(
       .NumInp (1 + NumSnaxWideTcdmPorts),
       .NumOut (NrSuperBanks),

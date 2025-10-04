@@ -1,7 +1,7 @@
 package snax.utils
 
 import chisel3._
-
+// TCDM will expect an address, use these bundles
 // simplified tcdm interface
 class TcdmReq(addrWidth: Int, tcdmDataWidth: Int) extends Bundle {
   val addr  = UInt(addrWidth.W)

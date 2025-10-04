@@ -6,7 +6,7 @@
 // Author: Wolfgang Roenninger <wroennin@ethz.ch>
 
 `include "mem_interface/typedef.svh"
-
+// Sahil: Study this
 /// Lightweight wrapper for a fixed response latency interconnect, i.e.,
 /// something that can be used to interconnect memories.
 module snitch_tcdm_interconnect #(

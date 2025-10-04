@@ -53,6 +53,20 @@ class InterconnectTest extends AnyFlatSpec with ChiselScalatestTester {
       dut.io.streamerP(0)(0).ready.poke(false.B)
       dut.clock.step(1)
       dut.io.banks(0).ready.expect(false.B)
+
+      // Case 4: CPU and Streamer both are ready, first CPU and then Streamer
+      dut.io.cpuP(0).ready.poke(true.B)
+      dut.io.streamerP(0)(0).ready.poke(true.B)
+      dut.clock.step(1)
+      dut.io.cpuP(0).valid.expect(true.B)
+      dut.io.cpuP(0).bits.expect(0xABCD.U)
+      dut.io.streamerP(0)(0).valid.expect(false.B)
+      dut.io.banks(0).ready.expect(true.B)
+      dut.clock.step(1)
+      dut.io.cpuP(0).valid.expect(false.B)
+      dut.io.streamerP(0)(0).valid.expect(true.B)
+      dut.io.streamerP(0)(0).bits.expect(0xABCD.U)
+      dut.io.banks(0).ready.expect(true.B)
     }
   }
 }

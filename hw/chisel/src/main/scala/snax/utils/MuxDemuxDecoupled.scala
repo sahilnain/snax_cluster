@@ -82,7 +82,6 @@ object SplitterDecoupledEmitter extends App {
     getVerilogString(new SplitterDecoupled(UInt(8.W), 8))
   )
 }
-
 /** The N-in, 1out Demux for Decoupled signal
   */
 class MuxDecoupled[T <: Data](dataType: T, numInput: Int) extends Module with RequireAsyncReset {
